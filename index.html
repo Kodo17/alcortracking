@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AlcorTracking</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#c8102e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="AlcorTracking">
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--tx:#1b1f24;--mu:#667080;--bd:#dce0e6;--ac:#c8102e;--on:#fff;--ok:#1a7f4b;box-sizing:border-box;padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root{--bg:#14171b;--card:#1e2328;--tx:#e8ebef;--mu:#9aa4b2;--bd:#323a44;--ac:#ef4560;--on:#14171b;--ok:#4cc58a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{background:var(--ac);color:var(--on);padding:calc(14px + env(safe-area-inset-top,0px)) 16px 14px}
+header h1{margin:0;font-size:20px}header small{opacity:.85}
+nav{display:flex;gap:6px;padding:10px 12px;background:var(--card);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5}
+nav button{flex:1;padding:9px 4px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:8px;font-size:14px;cursor:pointer}
+nav button.on{background:var(--ac);color:var(--on);border-color:var(--ac)}
+main{max-width:760px;margin:0 auto;padding:14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 3px}
+input,textarea,select{width:100%;padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{margin-top:14px;width:100%;padding:12px;border:0;border-radius:8px;background:var(--ac);color:var(--on);font:600 15px system-ui;cursor:pointer}
+.btn.sec{background:var(--bg);color:var(--tx);border:1px solid var(--bd)}
+.msg{padding:10px;border-radius:8px;margin-bottom:12px;background:var(--card);border:1px solid var(--bd)}
+.ok{color:var(--ok)}.mu{color:var(--mu)}
+.trip b{font-size:15px}.trip .meta{color:var(--mu);font-size:13px}
+.trip .del{float:right;background:none;border:0;color:var(--mu);cursor:pointer;font-size:13px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:8px 6px;border-bottom:1px solid var(--bd);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mu);font-weight:600;font-size:12px}
+tfoot td{font-weight:700}
+footer{text-align:center;padding:10px 0 24px;font-size:12px}
+footer a{color:var(--mu);cursor:pointer;text-decoration:underline}
+</style>
+</head>
+<body>
+<header><h1>AlcorTracking</h1><small>Alcor Holding · foaie de parcurs și consum combustibil</small></header>
+<nav id="nav"></nav>
+<main id="app"></main>
+<script src="config.js"></script>
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getAuth,signInAnonymously} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {initializeFirestore,persistentLocalCache,persistentMultipleTabManager,collection,doc,setDoc,deleteDoc,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const num=v=>parseFloat(String(v).replace(',','.'))||0;
+const fmt=(n,d=0)=>n.toLocaleString('ro-RO',{minimumFractionDigits:d,maximumFractionDigits:d});
+const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+const P=()=>{try{return JSON.parse(localStorage.getItem('alcor_p'))||{}}catch(e){return{}}};
+const setP=o=>{try{localStorage.setItem('alcor_p',JSON.stringify(o))}catch(e){}};
+const getTeam=()=>{try{return localStorage.getItem('alcor_team')||''}catch(e){return''}};
+let fdb=null,trips=[],tab='nou',month=today().slice(0,7),who='',status='Se conectează…',flash='',team=getTeam();
+
+function nav(){
+  if(!team){$('#nav').innerHTML='';return}
+  const t=[['nou','Zi nouă'],['istoric','Istoric'],['raport','Raport lunar']];
+  $('#nav').innerHTML=t.map(([k,l])=>`<button class="${tab===k?'on':''}" data-t="${k}">${l}</button>`).join('');
+  $('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;flash='';render()});
+}
+function render(){
+  nav();
+  const v=!team?vCod():({nou:vNou,istoric:vIst,raport:vRap}[tab])();
+  $('#app').innerHTML=(team&&!fdb?`<div class="msg">${esc(status)}</div>`:'')+(flash?`<div class="msg ok">${esc(flash)}</div>`:'')+v+(team?'<footer><a id="chg">Schimbă codul echipei</a></footer>':'');
+  bind();
+}
+function vCod(){return `<div class="card"><b>Cod echipă</b><p class="mu">Introdu codul primit de la coordonator. Toți colegii folosesc același cod și văd aceleași înregistrări.</p>
+<input id="f_team" placeholder="ex. alcor-tehnic-2026" autocapitalize="none" autocomplete="off"><button class="btn" id="setteam">Continuă</button></div>`}
+
+function vNou(){const p=P();return `<div class="card"><b>Foaie de parcurs – o zi</b>
+<label>Data</label><input id="f_date" type="date" value="${today()}">
+<div class="row"><div><label>Nume</label><input id="f_name" value="${esc(p.name||'')}" placeholder="ex. Ion Popescu"></div>
+<div><label>Mașină / nr. înmatriculare</label><input id="f_car" value="${esc(p.car||'')}" placeholder="ex. B 123 ALC"></div></div>
+<label>Traseu (plecare → opriri → destinație)</label><textarea id="f_route" rows="3" placeholder="ex. Sediu București → Ploiești (client X) → Brașov (șantier) → București"></textarea>
+<div class="row"><div><label>Km început (bord)</label><input id="f_ks" inputmode="decimal"></div>
+<div><label>Km final (bord)</label><input id="f_ke" inputmode="decimal"></div></div>
+<div class="row"><div><label>Combustibil alimentat (litri, opțional)</label><input id="f_l" inputmode="decimal"></div>
+<div><label>Cost combustibil (RON, opțional)</label><input id="f_c" inputmode="decimal"></div></div>
+<label>Observații (opțional)</label><input id="f_obs">
+<button class="btn" id="save">Salvează ziua</button></div>`}
+
+function filtered(){return trips.filter(t=>(t.date||'').startsWith(month)&&(!who||t.name===who)).sort((a,b)=>(b.date||'').localeCompare(a.date||''))}
+function names(){return [...new Set(trips.map(t=>t.name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ro'))}
+function filters(){return `<div class="card"><div class="row"><div><label>Luna</label><input id="f_m" type="month" value="${month}"></div>
+<div><label>Coleg</label><select id="f_w"><option value="">Toți</option>${names().map(n=>`<option ${n===who?'selected':''}>${esc(n)}</option>`).join('')}</select></div></div></div>`}
+
+function vIst(){
+  const l=filtered();
+  return filters()+(l.length?l.map(t=>`<div class="card trip"><button class="del" data-d="${esc(t.id)}">Șterge</button><b>${esc(t.date)} · ${esc(t.name)}</b>
+<div class="meta">${esc(t.car)} · ${fmt(t.km)} km${t.cost?` · ${fmt(t.cost,2)} RON`:''}${t.liters?` · ${fmt(t.liters,1)} l`:''}</div>
+<div>${esc(t.route)}</div>${t.obs?`<div class="meta">${esc(t.obs)}</div>`:''}</div>`).join(''):'<div class="msg mu">Nicio înregistrare pentru filtrul ales.</div>');
+}
+
+function stats(list){
+  const m={};
+  list.forEach(t=>{const o=m[t.name]||(m[t.name]={name:t.name,n:0,km:0,l:0,c:0,kmF:0});
+    o.n++;o.km+=t.km||0;o.l+=t.liters||0;o.c+=t.cost||0;if(t.liters)o.kmF+=t.km||0});
+  return Object.values(m).sort((a,b)=>a.name.localeCompare(b.name,'ro'));
+}
+function vRap(){
+  const s=stats(trips.filter(t=>(t.date||'').startsWith(month)));
+  const T=s.reduce((a,o)=>({n:a.n+o.n,km:a.km+o.km,l:a.l+o.l,c:a.c+o.c}),{n:0,km:0,l:0,c:0});
+  const row=o=>`<td>${fmt(o.n)}</td><td>${fmt(o.km)}</td><td>${fmt(o.l,1)}</td><td>${fmt(o.c,2)}</td><td>${o.kmF&&o.l?fmt(o.l/o.kmF*100,1):'–'}</td><td>${o.km&&o.c?fmt(o.c/o.km,2):'–'}</td>`;
+  return `<div class="card"><label style="margin-top:0">Luna</label><input id="f_m" type="month" value="${month}"></div>`+
+  (s.length?`<div class="card scroll"><table><thead><tr><th>Coleg</th><th>Zile</th><th>Km</th><th>Litri</th><th>RON</th><th>l/100km</th><th>RON/km</th></tr></thead><tbody>
+${s.map(o=>`<tr><td>${esc(o.name)}</td>${row(o)}</tr>`).join('')}</tbody><tfoot><tr><td>Total</td>${row(T)}</tr></tfoot></table></div>
+<p class="mu" style="font-size:12px">Consumul l/100km se calculează doar din zilele cu alimentare înregistrată, deci e orientativ.</p>
+<button class="btn sec" id="csv">Descarcă CSV (Excel)</button>`:'<div class="msg mu">Nicio înregistrare în luna aleasă.</div>');
+}
+
+function bind(){
+  const sv=$('#save');if(sv)sv.onclick=save;
+  const m=$('#f_m');if(m)m.onchange=()=>{month=m.value||month;render()};
+  const w=$('#f_w');if(w)w.onchange=()=>{who=w.value;render()};
+  document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>del(b.dataset.d));
+  const c=$('#csv');if(c)c.onclick=csv;
+  const st=$('#setteam');if(st)st.onclick=()=>{
+    const v=$('#f_team').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g,'');
+    if(v.length<6){alert('Codul trebuie să aibă minimum 6 caractere (litere, cifre, - sau _).');return}
+    try{localStorage.setItem('alcor_team',v)}catch(e){} team=v;connect();render();
+  };
+  const ch=$('#chg');if(ch)ch.onclick=()=>{if(confirm('Sigur vrei să schimbi codul echipei?')){try{localStorage.removeItem('alcor_team')}catch(e){}location.reload()}};
+}
+function save(){
+  const g=i=>$('#'+i).value.trim();
+  const ks=num(g('f_ks')),ke=num(g('f_ke'));
+  if(!g('f_name')||!g('f_car')||!g('f_route')||!g('f_date')){alert('Completează data, numele, mașina și traseul.');return}
+  if(ke<ks||!ke){alert('Verifică kilometrii: cel final trebuie să fie mai mare decât cel de început.');return}
+  if(!fdb){alert('Aplicația nu este conectată încă. Încearcă din nou în câteva secunde.');return}
+  const id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  const rec={date:g('f_date'),name:g('f_name'),car:g('f_car').toUpperCase(),route:g('f_route'),kmStart:ks,kmEnd:ke,km:ke-ks,liters:num(g('f_l')),cost:num(g('f_c')),obs:g('f_obs'),created:Date.now()};
+  // fără await: funcționează și fără semnal, se sincronizează automat când revine internetul
+  setDoc(doc(fdb,'teams',team,'trips',id),rec).catch(e=>alert('Nu s-a putut salva: '+(e&&e.message||e)));
+  setP({name:rec.name,car:rec.car});month=rec.date.slice(0,7);who='';
+  flash='Ziua a fost salvată. Dacă nu ai semnal, se trimite automat când revine internetul.';tab='istoric';render();
+}
+function del(id){
+  if(!confirm('Sigur ștergi această înregistrare?'))return;
+  deleteDoc(doc(fdb,'teams',team,'trips',id)).catch(e=>alert('Nu s-a putut șterge: '+(e&&e.message||e)));
+}
+function csv(){
+  const l=trips.filter(t=>(t.date||'').startsWith(month)).sort((a,b)=>a.date.localeCompare(b.date));
+  const q=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  const rows=[['Data','Nume','Masina','Traseu','Km inceput','Km final','Km','Litri','RON','Observatii']].concat(l.map(t=>[t.date,t.name,t.car,t.route,t.kmStart,t.kmEnd,t.km,t.liters,t.cost,t.obs]));
+  const blob=new Blob(['\ufeff'+rows.map(r=>r.map(q).join(';')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='AlcorTracking_'+month+'.csv';document.body.appendChild(a);a.click();a.remove();
+}
+
+let started=false;
+async function connect(){
+  if(started||!team)return;
+  const cfg=window.FIREBASE_CONFIG;
+  if(!cfg||!cfg.apiKey||String(cfg.apiKey).startsWith('LIPESTE')){status='Aplicația nu este configurată încă. Completează fișierul config.js cu datele din Firebase.';render();return}
+  started=true;
+  try{
+    const app=initializeApp(cfg);
+    const auth=getAuth(app);
+    await auth.authStateReady();
+    if(!auth.currentUser)await signInAnonymously(auth);
+    const d=initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})});
+    onSnapshot(collection(d,'teams',team,'trips'),s=>{
+      fdb=d;trips=s.docs.map(x=>({id:x.id,...x.data()}));render();
+    },e=>{status='Eroare la citirea datelor: '+(e&&e.message||'');render()});
+    fdb=d;
+  }catch(e){started=false;status='Nu m-am putut conecta (verifică internetul și config.js): '+(e&&e.message||'');render()}
+}
+render();connect();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>

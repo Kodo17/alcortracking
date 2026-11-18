@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Datele sunt grupate pe cod de echipă; nu se poate lista lista codurilor.
+    match /teams/{team}/trips/{trip} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
